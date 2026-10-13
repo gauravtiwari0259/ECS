@@ -13,24 +13,24 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class SensorPayload(BaseModel):
-    solar_v: float = Field(..., description="Raw solar voltage from INA219 1")
-    batt_v: float = Field(..., description="Raw battery voltage from INA219 2")
-    load_i: float = Field(..., description="Raw load current from INA219 3")
+    solar_v: float = Field(..., description="Raw solar voltage from INA219 #1")
+    batt_v: float = Field(..., description="Raw battery voltage from INA219 #2")
+    load_i: float = Field(..., description="Raw load current from INA219 #3")
     hour: int = Field(..., ge=0, le=23, description="Hour from DS3231 RTC")
     minute: int = Field(..., ge=0, le=59, description="Minute from DS3231 RTC")
 
-app = FastAPI(title="AI Microgrid Controller API", version="1.0.0")
+app = FastAPI(title="AI Microgrid Controller API", version="2.0.0")
 
 try:
     model = xgb.XGBClassifier()
     model.load_model('microgrid_xgboost_model.json')
-    logger.info("XGBoost model loaded successfully.")
+    logger.info("XGBoost 2-state model loaded successfully.")
 except Exception as e:
     logger.error(f"Failed to load model. Ensure 'microgrid_xgboost_model.json' is in the directory. Error: {e}")
 
 @app.get("/")
 async def root():
-    return {"message": "Microgrid AI Server is Running. Go to /docs to test."}
+    return {"message": "Microgrid 2-State AI Server is Running. Go to /docs to test."}
 
 @app.post("/predict")
 async def predict_microgrid_state(data: SensorPayload):
@@ -49,13 +49,13 @@ async def predict_microgrid_state(data: SensorPayload):
 
         prediction = int(model.predict(features)[0])
 
+        # Updated to 2 states for single-relay solar/battery switching
         action_map = {
             0: "SOLAR_MODE",
-            1: "BATTERY_MODE",
-            2: "SHED_LOAD"
+            1: "BATTERY_MODE"
         }
 
-        target_action = action_map.get(prediction, "SHED_LOAD")
+        target_action = action_map.get(prediction, "BATTERY_MODE") # Fallback to battery safety
 
         logger.info(f"Received V_sol:{data.solar_v}V, V_bat:{data.batt_v}V | Prediction: {target_action}")
 

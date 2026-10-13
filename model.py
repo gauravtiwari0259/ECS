@@ -1,33 +1,41 @@
+import numpy as np
 import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import accuracy_score, classification_report
 
 
 df = pd.read_csv('microgrid_training_data_obscured.csv')
 
-X = df.drop('target_action', axis=1)
-y = df['target_action']
 
+if 'target' in df.columns:
+    target_col = 'target'
+elif 'label' in df.columns:
+    target_col = 'label'
+else:
+
+    target_col = df.columns[-1]
+
+df = df[df[target_col] != 2]
+
+X = df[['hour_sin', 'hour_cos', 'solar_v', 'batt_v', 'load_i']]
+y = df[target_col]
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-
 model = xgb.XGBClassifier(
     n_estimators=100,
-    max_depth=4,
+    max_depth=5,
     learning_rate=0.1,
-    objective='multi:softprob',
-    eval_metric='mlogloss',
-    random_state=42
+    objective='binary:logistic'
 )
 
-print("Training model...")
+print("Training 2-state microgrid XGBoost model...")
 model.fit(X_train, y_train)
 
-print("\n--- Model Evaluation ---")
-y_pred = model.predict(X_test)
-print(classification_report(y_test, y_pred, target_names=['Solar (0)', 'Battery (1)', 'Shed Load (2)']))
+preds = model.predict(X_test)
+print(f"Accuracy: {accuracy_score(y_test, preds):.4f}")
+print(classification_report(y_test, preds))
 
 model.save_model('microgrid_xgboost_model.json')
-print("Model saved to 'microgrid_xgboost_model.json'. Ready for FastAPI integration!")
+print("New 2-class model saved successfully as 'microgrid_xgboost_model.json'")
