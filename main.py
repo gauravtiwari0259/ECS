@@ -12,6 +12,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class SensorPayload(BaseModel):
     solar_v: float = Field(..., description="Raw solar voltage from INA219 #1")
     batt_v: float = Field(..., description="Raw battery voltage from INA219 #2")
@@ -19,21 +20,38 @@ class SensorPayload(BaseModel):
     hour: int = Field(..., ge=0, le=23, description="Hour from DS3231 RTC")
     minute: int = Field(..., ge=0, le=59, description="Minute from DS3231 RTC")
 
+
 app = FastAPI(title="AI Microgrid Controller API", version="2.0.0")
 
-try:
-    model = xgb.XGBClassifier()
-    model.load_model('microgrid_xgboost_model.json')
-    logger.info("XGBoost 2-state model loaded successfully.")
-except Exception as e:
-    logger.error(f"Failed to load model. Ensure 'microgrid_xgboost_model.json' is in the directory. Error: {e}")
+model = None
+
+
+@app.on_event("startup")
+async def load_xgboost_model():
+    global model
+    model_path = 'microgrid_xgboost_model.json'
+    try:
+        if not os.path.exists(model_path):
+            logger.error(f"Critical Error: Model file '{model_path}' not found in directory!")
+            return
+        model = xgb.XGBClassifier()
+        model.load_model(model_path)
+        logger.info("XGBoost 2-state model loaded successfully on startup.")
+    except Exception as e:
+        logger.error(f"Failed to load XGBoost model. Error: {e}")
+
 
 @app.get("/")
 async def root():
-    return {"message": "Microgrid 2-State AI Server is Running. Go to /docs to test."}
+    return {"message": "Microgrid 2-State AI Server is Running. Access /docs for Swagger UI."}
+
 
 @app.post("/predict")
 async def predict_microgrid_state(data: SensorPayload):
+    global model
+    if model is None:
+        raise HTTPException(status_code=503, detail="ML model is not loaded on the server.")
+
     try:
         time_decimal = data.hour + (data.minute / 60.0)
         hour_sin = math.sin(2 * math.pi * time_decimal / 24.0)
@@ -45,25 +63,34 @@ async def predict_microgrid_state(data: SensorPayload):
             'solar_v': data.solar_v,
             'batt_v': data.batt_v,
             'load_i': data.load_i
-        }])
+        }], columns=['hour_sin', 'hour_cos', 'solar_v', 'batt_v', 'load_i'])
 
-        prediction = int(model.predict(features)[0])
+        raw_pred = model.predict(features)[0]
+        prediction = int(raw_pred)
 
         action_map = {
             0: "SOLAR_MODE",
             1: "BATTERY_MODE"
         }
 
-        target_action = action_map.get(prediction, "BATTERY_MODE") # Fallback to battery safety
+        target_action = action_map.get(prediction, "BATTERY_MODE")
 
-        logger.info(f"Received V_sol:{data.solar_v}V, V_bat:{data.batt_v}V | Prediction: {target_action}")
+        logger.info(f"V_sol:{data.solar_v}V | V_bat:{data.batt_v}V | Load:{data.load_i}A --> State: {target_action}")
 
-        file_exists = os.path.isfile('live_microgrid_log.csv')
-        with open('live_microgrid_log.csv', mode='a', newline='') as f:
+        log_file = 'live_microgrid_log.csv'
+        file_exists = os.path.isfile(log_file)
+        with open(log_file, mode='a', newline='') as f:
             writer = csv.writer(f)
             if not file_exists:
                 writer.writerow(['timestamp', 'solar_v', 'batt_v', 'load_i', 'prediction_class', 'relay_action'])
-            writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), data.solar_v, data.batt_v, data.load_i, prediction, target_action])
+            writer.writerow([
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                data.solar_v,
+                data.batt_v,
+                data.load_i,
+                prediction,
+                target_action
+            ])
 
         return {
             "status": "success",
@@ -72,8 +99,9 @@ async def predict_microgrid_state(data: SensorPayload):
         }
 
     except Exception as e:
-        logger.error(f"Inference error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error during ML inference.")
+        logger.error(f"Inference pipeline error: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error during ML inference: {str(e)}")
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
