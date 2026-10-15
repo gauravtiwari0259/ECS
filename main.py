@@ -49,7 +49,6 @@ async def predict_microgrid_state(data: SensorPayload):
 
         prediction = int(model.predict(features)[0])
 
-        # Updated to 2 states for single-relay solar/battery switching
         action_map = {
             0: "SOLAR_MODE",
             1: "BATTERY_MODE"
